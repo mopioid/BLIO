@@ -93,7 +93,8 @@ public class BLIO
                     if (line != string.Empty)
                         results.Add(line);
                 }
-                //  If we've gotten this far without any exceptions, send 
+                // If we've gotten this far without any exceptions, the query is
+                // complete, so return the results.
                 return results.ToArray();
             }
             catch (IOException exception)
@@ -104,6 +105,7 @@ public class BLIO
             }
             pipe.Close();
         }
+        // If all three attempts encountered an IOException, return null.
         return null;
     }
 
@@ -118,10 +120,10 @@ public class BLIO
     ///  specified property.
     /// </returns>
     /// 
-    public static Dictionary<Object, string> GetAll(string className, string property)
+    public static Dictionary<BLObject, string> GetAll(string className, string property)
     {
         // Create the dictionary we will return.
-        var results = new Dictionary<Object, string>();
+        var results = new Dictionary<BLObject, string>();
 
         // Run the getall command. If this fails, return the empty results.
         string[] namesDump = RunCommand("getall {0} {1}", className, property);
@@ -148,7 +150,7 @@ public class BLIO
             objectEnd -= 1;
             var objectName = nameDump.Substring(objectStart, objectEnd - objectStart);
             // Create an object with the object and class names.
-            var key = new Object(objectName, className);
+            var key = new BLObject(objectName, className);
 
             // The object's property value begins just after the suffix, and
             // ends after the distance between that and the end of the line.
@@ -162,7 +164,7 @@ public class BLIO
     ///  Represents an object in game.
     /// </summary>
     /// 
-    public class Object
+    public class BLObject
     {
         /// <summary>The object's name, suitable for set commands, etcetera.</summary>
         /// 
@@ -228,7 +230,7 @@ public class BLIO
         /// <param name="property">The property to retreive.</param>
         /// <returns>The object referred to in the property, or null if none is found.</returns>
         /// 
-        public Object GetPropertyObject(string property)
+        public BLObject GetPropertyObject(string property)
         {
             // Attempt to retrieve the raw value of the property, returning null
             // on failure.
@@ -276,7 +278,7 @@ public class BLIO
         /// </summary>
         /// <param name="objectName">The name of the object.</param>
         /// 
-        public Object(string objectName)
+        public BLObject(string objectName)
         {
             Name = objectName;
             Class = null;
@@ -287,7 +289,7 @@ public class BLIO
         /// <param name="objectName">The name of the object.</param>
         /// <param name="className">The class of the object.</param>
         /// 
-        public Object(string objectName, string className)
+        public BLObject(string objectName, string className)
         {
             Name = objectName;
             Class = className;
@@ -302,7 +304,7 @@ public class BLIO
         /// <param name="value">The raw object declaration.</param>
         /// <returns>The object, or null if the declaration is in the incorrect format.</returns>
         /// 
-        public static Object GetFromValue(string value)
+        public static BLObject GetFromValue(string value)
         {
             if (value == null)
                 return null;
@@ -314,13 +316,13 @@ public class BLIO
             string className = match.Groups[1].Value;
             string objectName = match.Groups[2].Value;
 
-            return new Object(objectName, className);
+            return new BLObject(objectName, className);
         }
 
         /// <summary>Create an object based on the local player's WillowPlayerController.</summary>
         /// <returns>The WillowPlayerController object.</returns>
         /// 
-        public static Object GetPlayerController()
+        public static BLObject GetPlayerController()
         {
             // Querying all LocalPlayer objects for their Actor property should
             // return a single object and its WillowPlayerController.
@@ -329,7 +331,7 @@ public class BLIO
             // the first one, if any.
             foreach (string actor in localPlayerControllers.Values)
             {
-                var controller = Object.GetFromValue(actor);
+                var controller = BLObject.GetFromValue(actor);
                 if (controller != null)
                     return controller;
             }
