@@ -56,7 +56,7 @@ public class BLIO
     /// <exception cref="System.ArgumentNullException" />
     /// <exception cref="System.FormatException" />
     /// 
-    public static string[] RunCommand(string format, params object[] arguments)
+    public static IReadOnlyCollection<string> RunCommand(string format, params object[] arguments)
     {
         string command = String.Format(format, arguments);
         List<string> results = new List<string>();
@@ -95,7 +95,7 @@ public class BLIO
                 }
                 // If we've gotten this far without any exceptions, the query is
                 // complete, so return the results.
-                return results.ToArray();
+                return results.AsReadOnly();
             }
             catch (IOException exception)
             {
@@ -120,13 +120,13 @@ public class BLIO
     ///  specified property.
     /// </returns>
     /// 
-    public static Dictionary<BLObject, string> GetAll(string className, string property)
+    public static IReadOnlyDictionary<BLObject, string> GetAll(string className, string property)
     {
         // Create the dictionary we will return.
         var results = new Dictionary<BLObject, string>();
 
         // Run the getall command. If this fails, return the empty results.
-        string[] namesDump = RunCommand("getall {0} {1}", className, property);
+        var namesDump = RunCommand("getall {0} {1}", className, property);
         if (namesDump == null)
             return results;
 
@@ -176,7 +176,7 @@ public class BLIO
 
         // Lazily computed dictionary containing the object's properties.
         private Dictionary<string, string> _Properties;
-        private Dictionary<string, string> Properties
+        private IReadOnlyDictionary<string, string> Properties
         {
             get
             {
@@ -187,7 +187,7 @@ public class BLIO
                 _Properties = new Dictionary<string, string>();
 
                 // Run the dump command. If this fails, leave the results empty.
-                string[] propertiesDump = RunCommand("obj dump {0}", Name);
+                var propertiesDump = RunCommand("obj dump {0}", Name);
                 if (propertiesDump == null)
                     return _Properties;
 
@@ -243,7 +243,7 @@ public class BLIO
         /// <param name="property">The property to retreive.</param>
         /// <returns>The array of raw values, or null if none is found.</returns>
         /// 
-        public string[] GetPropertyArray(string propertyName)
+        public IReadOnlyCollection<string> GetPropertyArray(string propertyName)
         {
             List<string> values = new List<string>();
 
@@ -269,7 +269,7 @@ public class BLIO
 
             // If no members of the array were found, consider it not to exist and
             // return null.
-            return values.Count > 0 ? values.ToArray() : null;
+            return values.Count > 0 ? values.AsReadOnly() : null;
         }
 
         /// <summary>
