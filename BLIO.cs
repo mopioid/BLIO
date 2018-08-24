@@ -109,6 +109,48 @@ public class BLIO
         return null;
     }
 
+    // getall results should be in the following format:
+    //     <index>) <subclass> <object>.Name = ...
+    private static Lazy<Regex> GetallPattern = new Lazy<Regex>(() => new Regex(@"^\d+\) ([^ ]+) ([^']+)\.Name = ", RegexOptions.Compiled));
+
+    /// <summary>
+    ///  Performs a getall command for a given class and property, and returns
+    ///  a list of all objects of that class.
+    /// </summary>
+    /// <param name="className">The name of the class to retreive each object for.</param>
+    /// <returns>
+    ///  A list of objects of the given class.
+    /// </returns>
+    /// 
+    public static IReadOnlyList<BLObject> GetAll(string className)
+    {
+        var results = new List<BLObject>();
+
+        // Run the getall command. If this fails, return the empty results.
+        var namesDump = RunCommand("getall {0} Name", className);
+        if (namesDump == null)
+            return results;
+
+        // Iterate over the lines of the getall results.
+        foreach (string nameDump in namesDump)
+        {
+            // Attempt to match the line against the expected format. If this
+            // fails, skip it.
+            var match = GetallPattern.Value.Match(nameDump);
+            if (!match.Success)
+                continue;
+
+            // Extract the object's name and subclass name from the match.
+            string subclassName = match.Groups[1].Value;
+            string objectName = match.Groups[2].Value;
+
+            // Create a new object accordingly, and add it to our results.
+            results.Add(new BLObject(objectName, subclassName));
+        }
+
+        return results.AsReadOnly();
+    }
+
     /// <summary>
     ///  Performs a getall command for a given class and property, and returns
     ///  a dictionary with the property values keyed by their objects.
@@ -130,32 +172,29 @@ public class BLIO
         if (namesDump == null)
             return results;
 
+        // getall results should be in the following format:
+        //     <index>) <subclass> <object>.<property> = <value>
+        Regex getallPattern = new Regex($@"^\d+\) ([^ ]+) ([^']+)\.{Regex.Escape(property)} = (.*)$", RegexOptions.Compiled);
+
+        // Iterate over the lines of the getall results.
         foreach (string nameDump in namesDump)
         {
-            // To extract the objects and values from the raw results, we locate
-            // their markers in the command output.
-            string prefix = $" {className} ";
-            string suffix = $".{property} = ";
-            int objectStart = nameDump.IndexOf(prefix);
-            int objectEnd = nameDump.IndexOf(property);
+            // Attempt to match the line against the expected format. If this
+            // fails, skip it.
+            var match = getallPattern.Match(nameDump);
 
-            // If the line is missing either of the markers, ignore it.
-            if (objectStart == -1 || objectEnd == -1)
-                continue;
+            // Extract the object's name, subclass name, and value for the
+            // property from the match.
+            string subclassName = match.Groups[1].Value;
+            string objectName = match.Groups[2].Value;
+            string value = match.Groups[3].Value;
 
-            // The object's name is immediately following the end of the
-            // "prefix," and ends after the distance between that and the
-            // character before the suffix.
-            objectStart += prefix.Length;
-            objectEnd -= 1;
-            var objectName = nameDump.Substring(objectStart, objectEnd - objectStart);
-            // Create an object with the object and class names.
-            var key = new BLObject(objectName, className);
+            // Create a new object accordingly.
+            var key = new BLObject(objectName, subclassName);
 
-            // The object's property value begins just after the suffix, and
-            // ends after the distance between that and the end of the line.
-            int propertyStart = objectEnd + suffix.Length;
-            results[key] = nameDump.Substring(propertyStart, nameDump.Length - propertyStart);
+            // Associate the object with the value (or an empty string if no
+            // value) in our results.
+            results[key] = (value == null) ? "" : value;
         }
         return results;
     }
@@ -243,7 +282,7 @@ public class BLIO
         /// <param name="property">The property to retreive.</param>
         /// <returns>The array of raw values, or null if none is found.</returns>
         /// 
-        public IReadOnlyCollection<string> GetPropertyArray(string propertyName)
+        public IReadOnlyList<string> GetPropertyArray(string propertyName)
         {
             List<string> values = new List<string>();
 
