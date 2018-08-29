@@ -5,7 +5,7 @@ using System.IO.Pipes;
 using System.Text.RegularExpressions;
 
 
-public class BLIO
+public static class BLIO
 {
     /// <summary>
     ///  Attempts to connect to the CommandInjector pipe.
@@ -56,7 +56,7 @@ public class BLIO
     /// <exception cref="System.ArgumentNullException" />
     /// <exception cref="System.FormatException" />
     /// 
-    public static IReadOnlyCollection<string> RunCommand(string format, params object[] arguments)
+    public static IReadOnlyList<string> RunCommand(string format, params object[] arguments)
     {
         string command = String.Format(format, arguments);
         List<string> results = new List<string>();
@@ -127,16 +127,16 @@ public class BLIO
         var results = new List<BLObject>();
 
         // Run the getall command. If this fails, return the empty results.
-        var namesDump = RunCommand("getall {0} Name", className);
-        if (namesDump == null)
+        var output = RunCommand("getall {0} Name", className);
+        if (output == null)
             return results;
 
         // Iterate over the lines of the getall results.
-        foreach (string nameDump in namesDump)
+        foreach (string line in output)
         {
             // Attempt to match the line against the expected format. If this
             // fails, skip it.
-            var match = GetallPattern.Value.Match(nameDump);
+            var match = GetallPattern.Value.Match(line);
             if (!match.Success)
                 continue;
 
@@ -151,6 +151,12 @@ public class BLIO
         return results.AsReadOnly();
     }
 
+
+    // Getall array value members should be in the following format:
+    //     <class name>'<object name>'
+    private static Lazy<Regex> _MemberPattern = new Lazy<Regex>(() => new Regex(@"^\t\d+: (.*)$", RegexOptions.Compiled));
+
+
     /// <summary>
     ///  Performs a getall command for a given class and property, and returns
     ///  a dictionary with the property values keyed by their objects.
@@ -158,44 +164,97 @@ public class BLIO
     /// <param name="className">The name of the class to retreive each object for.</param>
     /// <param name="property">The property to retreive for each object.</param>
     /// <returns>
-    ///  A dictionary in which objects of the class key their raw value for the
-    ///  specified property.
+    ///  A dictionary in which objects of the class key their value for the
+    ///  specified property. If the property contains a singular value, the
+    ///  value is a string. If it contains an array, the value is an
+    ///  IReadOnlyList&lt;string&gt;.
     /// </returns>
     /// 
-    public static IReadOnlyDictionary<BLObject, string> GetAll(string className, string property)
+    public static IReadOnlyDictionary<BLObject, object> GetAll(string className, string property)
     {
         // Create the dictionary we will return.
-        var results = new Dictionary<BLObject, string>();
+        var results = new Dictionary<BLObject, object>();
 
         // Run the getall command. If this fails, return the empty results.
-        var namesDump = RunCommand("getall {0} {1}", className, property);
-        if (namesDump == null)
+        var output = RunCommand("getall {0} {1}", className, property);
+        if (output == null)
             return results;
 
         // getall results should be in the following format:
         //     <index>) <subclass> <object>.<property> = <value>
-        Regex getallPattern = new Regex($@"^\d+\) ([^ ]+) ([^']+)\.{Regex.Escape(property)} = (.*)$", RegexOptions.Compiled);
+        // Or, if the result's property is an array:
+        //     <index>) <subclass> <object>.<property> =
+        Regex objectPattern = new Regex($@"^\d+\) ([^ ]+) (.+)\.{Regex.Escape(property)} =( ?)(.*)$", RegexOptions.Compiled);
 
-        // Iterate over the lines of the getall results.
-        foreach (string nameDump in namesDump)
+        // The current object and array we are working with.
+        BLObject objectKey = null;
+        List<string> arrayValue = null;
+
+        // Iterate over each line of output.
+        foreach (string line in output)
         {
-            // Attempt to match the line against the expected format. If this
-            // fails, skip it.
-            var match = getallPattern.Match(nameDump);
+            // The match for if we test a line for an object result.
+            Match objectMatch;
+            
+            // If we are currently working with an array as an object's value,
+            // we will test the current line for its membership.
+            if (arrayValue != null)
+            {
+                // Check that the current line is of the format for a member of
+                // an array value.
+                var memberMatch = _MemberPattern.Value.Match(line);
+                if (memberMatch.Success)
+                {
+                    // If it is, add the captured value to the array, and
+                    // proceed on to the next line.
+                    arrayValue.Add(memberMatch.Groups[1].Value);
+                    continue;
+                }
 
-            // Extract the object's name, subclass name, and value for the
-            // property from the match.
-            string subclassName = match.Groups[1].Value;
-            string objectName = match.Groups[2].Value;
-            string value = match.Groups[3].Value;
+                // If the line is not a member of the array, check whether it is
+                // of the format denoting a new object.
+                objectMatch = objectPattern.Match(line);
+                if (objectMatch.Success)
+                {
+                    // If it is, this indicates the working array value was
+                    // complete, so associate with the working object, and null
+                    // it to indicate we're no longer working with an array.
+                    results[objectKey] = arrayValue;
+                    arrayValue = null;
+                }
+            }
+            else
+            {
+                // If we are not currently working with an array, check whether
+                // the line is of the format denoting a new object. If not, skip
+                // this line and proceed to the next one.
+                objectMatch = objectPattern.Match(line);
+                if (!objectMatch.Success)
+                    continue;
+            }
 
-            // Create a new object accordingly.
-            var key = new BLObject(objectName, subclassName);
+            // By now we have a match for an object declaration. Extract the
+            // name and class name from it, and create a new object accordingly.
+            string subclassName = objectMatch.Groups[1].Value;
+            string objectName = objectMatch.Groups[2].Value;
+            objectKey = new BLObject(objectName, subclassName);
 
-            // Associate the object with the value (or an empty string if no
-            // value) in our results.
-            results[key] = (value == null) ? "" : value;
+            // If the value capture group for the match did capture, associate
+            // the object with the value.
+            if (objectMatch.Groups[3].Value.Length == 1)
+                results[objectKey] = objectMatch.Groups[4].Value;
+
+            // Otherwise, we are to expect an array as the value, so create a
+            // new list for indicating such and for storing the results.
+            else
+                arrayValue = new List<string>();
         }
+
+        // At the end of the results, if we had a working array value,
+        // associate with the working object.
+        if (arrayValue != null)
+            results[objectKey] = arrayValue;
+
         return results;
     }
 
@@ -203,125 +262,135 @@ public class BLIO
     ///  Represents an object in game.
     /// </summary>
     /// 
-    public class BLObject
+    public class BLObject: IEquatable<BLObject>
     {
         /// <summary>The object's name, suitable for set commands, etcetera.</summary>
         /// 
-        public string Name;
+        public readonly string Name;
 
         /// <summary>The object's class.</summary>
         /// 
-        public string Class;
+        public readonly string Class;
 
-        // Lazily computed dictionary containing the object's properties.
-        private Dictionary<string, string> _Properties;
-        private IReadOnlyDictionary<string, string> Properties
+        /// <summary>The manner in which a BLObject's properties should be fetched.</summary>
+        public enum PropertyMode
+        {
+            /// <summary>
+            ///  A dump of the object is acquired, and then stored for use each
+            ///  time a property of the object is queried. This is faster than
+            ///  the GetAll mode if the object does not have very large dumps,
+            ///  and several of its properties will be used.
+            /// </summary>
+            Dump,
+
+            /// <summary>
+            ///  Each time a property of the object is accessed, a getall of the
+            ///  property is performed for the object's class. This is faster
+            ///  than the Dump mode if the object has particularly large dumps,
+            ///  or if few properties of the object will be accessed, and if few
+            ///  objects exist in the object's class.
+            /// </summary>
+            GetAll
+        }
+
+        /// <summary>The mode to use when accessing the object's properties.</summary>
+        public PropertyMode UsePropertyMode = PropertyMode.Dump;
+
+
+        // Properties for members of the array will be in the format:
+        //     <property>=<value>
+        // Or:
+        //     <property>(<index>)=<value>
+        // Or:
+        //     <property>[<index>]=<value>
+        // Create a pattern to match these formats.
+        private static Lazy<Regex> _PropertyPattern = new Lazy<Regex>(() => new Regex(@"^  ([^=\[\]\(\)]+)(\(\d+\)|\[\d+\])?=(.*)$", RegexOptions.Compiled));
+
+        // Lazily computed dictionary containing the object's property dump.
+        private Dictionary<string, object> _Dump = null;
+        private IReadOnlyDictionary<string, object> Dump
         {
             get
             {
-                if (_Properties != null)
-                    return _Properties;
+                // If we've previously processed the dump, return it now.
+                if (_Dump != null)
+                    return _Dump;
 
                 // Create the dictionary we will return.
-                _Properties = new Dictionary<string, string>();
+                _Dump = new Dictionary<string, object>();
 
                 // Run the dump command. If this fails, leave the results empty.
                 var propertiesDump = RunCommand("obj dump {0}", Name);
                 if (propertiesDump == null)
-                    return _Properties;
+                    return _Dump;
 
                 // Iterate through the lines of the result.
                 foreach (string propertyDump in propertiesDump)
                 {
-                    // Find the index of the equals sign delineating the start
-                    // of the value.
-                    int propertyLength = propertyDump.IndexOf('=');
-                    // If the equals sign is at the very beginning (or not
-                    // found), this line does not contain a property.
-                    if (propertyLength < 3)
+                    // Check that the line is of the format for a property. 
+                    var propertyMatch = _PropertyPattern.Value.Match(propertyDump);
+                    if (!propertyMatch.Success)
                         continue;
 
-                    // The name of the property starts at the beginning of the
-                    // line, and ends at the location of the equals sign.
-                    string property = propertyDump.Substring(2, propertyLength - 2);
-                    // The value for the property is the entire remainder of the
-                    // line after the equals sign.
-                    _Properties[property] = propertyDump.Substring(propertyLength + 1);
+                    // If it is, extract the name and value for the property.
+                    string property = propertyMatch.Groups[1].Value;
+                    string value = propertyMatch.Groups[3].Value;
+
+                    // If the second group in the pattern matched, this
+                    // indicates the property is a member of the array.
+                    if (propertyMatch.Groups[2].Success)
+                    {
+                        List<string> array;
+
+                        // If we already have an array for the property stored
+                        // in our dump, retrieve it.
+                        if (_Dump.TryGetValue(property, out object arrayValue) && arrayValue is List<string>)
+                            array = (List<string>)arrayValue;
+                        // Otherwise, create a new array and add it to the dump.
+                        else
+                        {
+                            array = new List<string>();
+                            _Dump[property] = array;
+                        }
+                        // Add the new value to the property's array.
+                        array.Add(value);
+                    }
+                    // If the pattern did not match that of an array member,
+                    // simply add it to the dump as-is.
+                    else
+                        _Dump[property] = value;
                 }
-                return _Properties;
+
+                return _Dump;
             }
         }
+
 
         /// <summary>Get the raw value for a property of the object.</summary>
         /// <param name="property">The property to retreive.</param>
-        /// <returns>The raw value for the property, or null if none is found.</returns>
+        /// <returns>
+        ///  If the property contains a singular value, returns a string.
+        ///  If it contains an array, returns an IReadOnlyList&lt;string&gt;.
+        ///  If the property is not found, returns null.
+        /// </returns>
         /// 
-        public string GetProperty(string property)
+        public object this[string property]
         {
-            // Attempt to retrieve the raw value of the property, returning null
-            // on failure.
-            if (!Properties.TryGetValue(property, out string value))
-                return null;
-            return value;
-        }
-
-        /// <summary>Get the object referred to by a property of the object.</summary>
-        /// <param name="property">The property to retreive.</param>
-        /// <returns>The object referred to in the property, or null if none is found.</returns>
-        /// 
-        public BLObject GetPropertyObject(string property)
-        {
-            // Attempt to retrieve the raw value of the property, returning null
-            // on failure.
-            if (!Properties.TryGetValue(property, out string value))
-                return null;
-            return GetFromValue(value);
-        }
-
-        /// <summary>Get the array of raw values for a property of the object.</summary>
-        /// <param name="property">The property to retreive.</param>
-        /// <returns>The array of raw values, or null if none is found.</returns>
-        /// 
-        public IReadOnlyList<string> GetPropertyArray(string propertyName)
-        {
-            List<string> values = new List<string>();
-
-            // Properties for members of the array will be in the format:
-            //     <property>(<index>)
-            // Or:
-            //     <property>[<index>]
-            // Create a pattern to match these formats and capture the index.
-            var propertyPattern = new Regex($@"^{Regex.Escape(propertyName)}([\[\(])(\d+)([\]\)])$", RegexOptions.Compiled);
-
-            foreach (var property in Properties)
+            get
             {
-                // Attempt to match the property against the pattern. If the match
-                // failed, or if the index's brackets did not match, skip it.
-                var match = propertyPattern.Match(property.Key);
-                if (!match.Success ||
-                    (match.Groups[1].Value == "(" && match.Groups[3].Value != ")") ||
-                    (match.Groups[1].Value == "[" && match.Groups[3].Value != "]"))
-                    continue;
+                // If we use the object's dump to retrieve properties, do so.
+                if (UsePropertyMode == PropertyMode.Dump)
+                    return Dump.TryGetValue(property, out object value) ? value : null;
 
-                values.Add(property.Value);
+                // Otherwise, we are to get the property via a getall.
+                else
+                {
+                    // Get the values for each object in this one's class.
+                    var getall = GetAll(Class, property);
+                    // Return the value for this object, if any.
+                    return getall.TryGetValue(this, out object value) ? value : null;
+                }
             }
-
-            // If no members of the array were found, consider it not to exist and
-            // return null.
-            return values.Count > 0 ? values.AsReadOnly() : null;
-        }
-
-        /// <summary>
-        ///  Create an object with the specified name. (The resulting object's
-        ///  class property will be null.)
-        /// </summary>
-        /// <param name="objectName">The name of the object.</param>
-        /// 
-        public BLObject(string objectName)
-        {
-            Name = objectName;
-            Class = null;
-            _Properties = null;
         }
 
         /// <summary>Create an object with the specified name and class.</summary>
@@ -332,30 +401,33 @@ public class BLIO
         {
             Name = objectName;
             Class = className;
-            _Properties = null;
         }
 
         // Object declarations should be in the following format:
         //     <class name>'<object name>'
-        private static Lazy<Regex> _ObjectRegex = new Lazy<Regex>(() => new Regex(@"^([^']+)'([^']+)'$", RegexOptions.Compiled));
+        private static Lazy<Regex> _ObjectPattern = new Lazy<Regex>(() => new Regex(@"^([^']+)'([^']+)'$", RegexOptions.Compiled));
 
-        /// <summary>Create an object from a declaration in the format <class>'<object>'.</summary>
-        /// <param name="value">The raw object declaration.</param>
-        /// <returns>The object, or null if the declaration is in the incorrect format.</returns>
+        /// <summary>
+        ///  Creates a new object from a declaration in the format
+        ///  &lt;class&gt;'&lt;object&gt;'
+        /// </summary>
+        /// <param name="value"></param>
         /// 
-        public static BLObject GetFromValue(string value)
+        public BLObject(string value)
         {
+            // If we were passed a null value, return one.
             if (value == null)
-                return null;
-
-            var match = _ObjectRegex.Value.Match(value);
+                return;
+            
+            // Attempt to match the value against the format of an object
+            // declaration. If this fails, return null.
+            var match = _ObjectPattern.Value.Match(value);
             if (!match.Success)
-                return null;
+                return;
 
-            string className = match.Groups[1].Value;
-            string objectName = match.Groups[2].Value;
-
-            return new BLObject(objectName, className);
+            // Extract the object's class and name.
+            Class = match.Groups[1].Value;
+            Name = match.Groups[2].Value;
         }
 
         /// <summary>Create an object based on the local player's WillowPlayerController.</summary>
@@ -370,11 +442,27 @@ public class BLIO
             // the first one, if any.
             foreach (string actor in localPlayerControllers.Values)
             {
-                var controller = BLObject.GetFromValue(actor);
-                if (controller != null)
-                    return controller;
+                // Attempt to parse an object from the value. If this fails, or
+                // if the object is not a player controller, skip it.
+                var controller = new BLObject(actor);
+                if (controller == null || controller.Class != "WillowPlayerController")
+                    continue;
+
+                // As player controller objects are massive, set this one to use
+                // the GetAll property retrieval mode by default.
+                controller.UsePropertyMode = PropertyMode.GetAll;
+                return controller;
             }
             return null;
+        }
+
+        // Two game objects are considered equal if their class and name match.
+        public bool Equals(BLObject other) {
+            return (Class == other.Class && Name == other.Name);
+        }
+        // Compute hash values based on the object declaration format.
+        public override int GetHashCode() {
+            return $"{Class}'{Name}'".GetHashCode();
         }
     }
 }
