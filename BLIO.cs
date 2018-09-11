@@ -8,45 +8,6 @@ using System.Text.RegularExpressions;
 public static class BLIO
 {
     /// <summary>
-    ///  Attempts to connect to the CommandInjector pipe.
-    /// </summary>
-    /// <returns>
-    ///  The connected pipe, or null if it could not be connected to.
-    /// </returns>
-    /// <exception cref="System.IO.IOException" />
-    /// 
-    private static NamedPipeClientStream ConnectPipe()
-    {
-        // Create the connection to the pipe.
-        var pipe = new NamedPipeClientStream(".", "BLCommandInjector", PipeDirection.InOut);
-        if (!pipe.IsConnected)
-            // Attempt to connect to the pipe, timing out after one second.
-            // The timeout will occur if no game is running, for example.
-            try
-            {
-                pipe.Connect(1000);
-            }
-            // If we do timeout, we will be closing it and returning null.
-            catch (TimeoutException exception)
-            {
-#if DEBUG
-                Console.WriteLine(exception);
-#endif
-            }
-
-        // If the pipe was able to be connected, set it to communicate in
-        // message mode, and return it.
-        if (pipe.IsConnected)
-        {
-            pipe.ReadMode = PipeTransmissionMode.Message;
-            return pipe;
-        }
-        // If the pipe was not able to connect, close it and return null.
-        pipe.Close();
-        return null;
-    }
-
-    /// <summary>
     ///  Runs a command in the game console.
     /// </summary>
     /// <returns>
@@ -59,51 +20,72 @@ public static class BLIO
     public static IReadOnlyList<string> RunCommand(string format, params object[] arguments)
     {
         string command = String.Format(format, arguments);
-        List<string> results = new List<string>();
 
         // We will attempt to run the command up 3 times.
         for (int attempt = 1; attempt <= 3; attempt++)
         {
-            // If we can't even connect to the pipe, return null.
-            var pipe = ConnectPipe();
-            if (pipe == null)
-                return null;
-
-            // Create the reading and writing objects for the pipe.
-            var pipeWriter = new StreamWriter(pipe);
-            var pipeReader = new StreamReader(pipe);
-
-            // While attempting to perform reads and writes, we will be catching
-            // any IOExceptions that occur.
-            try
+            // Create the connection to the pipe.
+            using (var pipe = new NamedPipeClientStream(".", "BLCommandInjector", PipeDirection.InOut))
             {
-                // Write the line to the pipe, and flushing the pipe so that it
-                // is transmitted fully.
-                pipeWriter.WriteLine(command);
-                pipeWriter.Flush();
-
-                // Loop as we read from the pipe.
-                for (; ; )
-                {
-                    string line = pipeReader.ReadLine();
-                    // If reading returns null, we've reached the message's end.
-                    if (line == null)
-                        break;
-                    // If there was data to read, add it to our results.
-                    if (line != string.Empty)
-                        results.Add(line);
-                }
-                // If we've gotten this far without any exceptions, the query is
-                // complete, so return the results.
-                return results.AsReadOnly();
-            }
-            catch (IOException exception)
-            {
+                if (!pipe.IsConnected)
+                    // Attempt to connect to the pipe, timing out after one
+                    // second. The timeout will occur if no game is running.
+                    try
+                    {
+                        pipe.Connect(1000);
+                    }
+                    // If we do timeout, we will be returning null.
+                    catch (TimeoutException exception)
+                    {
 #if DEBUG
-                Console.WriteLine(exception);
+                        Console.WriteLine(exception);
 #endif
+                        return null;
+                    }
+
+                // While attempting to work with the pipe, we will be catching
+                // any IOExceptions that occur.
+                try
+                {
+                    // Set the pipe to communicate in message mode.
+                    pipe.ReadMode = PipeTransmissionMode.Message;
+
+                    // Create the reading and writing objects for the pipe.
+                    var pipeWriter = new StreamWriter(pipe);
+                    var pipeReader = new StreamReader(pipe);
+
+                    // Write the line to the pipe, and flushing the pipe so that
+                    // it is transmitted fully.
+                    pipeWriter.WriteLine(command);
+                    pipeWriter.Flush();
+
+                    // Create a list to store our lines of the result in.
+                    List<string> results = new List<string>();
+
+                    // Loop as we read from the pipe.
+                    for (; ; )
+                    {
+                        string line = pipeReader.ReadLine();
+                        // If reading returns null, we've reached the end.
+                        if (line == null)
+                            break;
+
+                        // If there was data to read, add it to our results.
+                        if (line != string.Empty)
+                            results.Add(line);
+                    }
+
+                    // If we've gotten this far without any exceptions, the
+                    // query is complete, so return the results.
+                    return results.AsReadOnly();
+                }
+                catch (IOException exception)
+                {
+#if DEBUG
+                    Console.WriteLine(exception);
+#endif
+                }
             }
-            pipe.Close();
         }
         // If all three attempts encountered an IOException, return null.
         return null;
